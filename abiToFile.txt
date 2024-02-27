@@ -1,0 +1,5 @@
+abigen --abi=./abis/ERC20.json --pkg=erc20 --out=ERC20.go
+abigen --abi=./abis/VotiumMerkle.json --pkg=votiumMerkle --out=VotiumMerkle.go
+abigen --abi=./abis/QuestDistributor.json --pkg=questDistributor --out=QuestDistributor.go
+abigen --abi=./abis/VotemarketV1.json --pkg=votemarketV1 --out=VotemarketV1.go
+abigen --abi=./abis/YBribeV3.json --pkg=yBribeV3 --out=YBribeV3.go
