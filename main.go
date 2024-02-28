@@ -9,6 +9,7 @@ import (
 	"main/contracts/erc20"
 	"main/contracts/questDistributor"
 	"main/contracts/votemarketV1"
+	"main/contracts/votemarketV2"
 	"main/contracts/votiumMerkle"
 	"main/contracts/yBribeV3"
 	"main/interfaces"
@@ -28,8 +29,11 @@ var VOTIUM_ADDRESSES = []common.Address{
 	common.HexToAddress("0x34590960981f98b55d236b70E8B4d9929ad89C9c"),
 }
 
-var VOTEMARKET_ADDRESSES = []common.Address{
+var VOTEMARKET_ADDRESSES_V1 = []common.Address{
 	common.HexToAddress("0x7D0F747eb583D43D41897994c983F13eF7459e1f"),
+}
+
+var VOTEMARKET_ADDRESSES_V2 = []common.Address{
 	common.HexToAddress("0x0000000BE1d98523B5469AfF51A1e7b4891c6225"),
 	common.HexToAddress("0x0000000895cB182E6f983eb4D8b4E0Aa0B31Ae4c"),
 }
@@ -58,7 +62,8 @@ func main() {
 		allClaimed = append(allClaimed, fetchVotium()...)
 
 		fmt.Println("Fetching votemarket")
-		allClaimed = append(allClaimed, fetchVotemarket()...)
+		allClaimed = append(allClaimed, fetchVotemarketV1()...)
+		allClaimed = append(allClaimed, fetchVotemarketV2()...)
 
 		fmt.Println("Fetching quest")
 		allClaimed = append(allClaimed, fetchQuest()...)
@@ -130,7 +135,8 @@ func fetchVotium() []interfaces.BountyClaimed {
 
 		event, err := votiumContract.ParseClaimed(vLog)
 		if err != nil {
-			panic(err)
+			fmt.Println(err)
+			continue
 		}
 
 		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
@@ -152,7 +158,7 @@ func fetchVotium() []interfaces.BountyClaimed {
 
 }
 
-func fetchVotemarket() []interfaces.BountyClaimed {
+func fetchVotemarketV1() []interfaces.BountyClaimed {
 	client, err := ethclient.Dial(RPC_URL)
 	if err != nil {
 		panic(err)
@@ -161,7 +167,7 @@ func fetchVotemarket() []interfaces.BountyClaimed {
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(16376672),
 		ToBlock:   nil, // Latest
-		Addresses: VOTEMARKET_ADDRESSES,
+		Addresses: VOTEMARKET_ADDRESSES_V1,
 		Topics:    [][]common.Hash{{common.HexToHash("0x6f9c9826be5976f3f82a3490c52a83328ce2ec7be9e62dcb39c26da5148d7c76")}},
 	}
 
@@ -180,7 +186,59 @@ func fetchVotemarket() []interfaces.BountyClaimed {
 
 		event, err := votemarketContract.ParseClaimed(vLog)
 		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
+		if err != nil {
 			panic(err)
+		}
+
+		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
+			TokenReward:   event.RewardToken,
+			Amount:        event.Amount,
+			BlockNumber:   vLog.BlockNumber,
+			Timestamp:     block.Time(),
+			TokenDecimals: getTokenDecimals(client, event.RewardToken),
+			Tx:            vLog.TxHash,
+		})
+	}
+
+	return bountiesClaimed
+
+}
+
+func fetchVotemarketV2() []interfaces.BountyClaimed {
+	client, err := ethclient.Dial(RPC_URL)
+	if err != nil {
+		panic(err)
+	}
+
+	query := ethereum.FilterQuery{
+		FromBlock: big.NewInt(16376672),
+		ToBlock:   nil, // Latest
+		Addresses: VOTEMARKET_ADDRESSES_V2,
+		Topics:    [][]common.Hash{{common.HexToHash("0x6f9c9826be5976f3f82a3490c52a83328ce2ec7be9e62dcb39c26da5148d7c76")}},
+	}
+
+	logs, err := client.FilterLogs(context.Background(), query)
+	if err != nil {
+		panic(err)
+	}
+
+	bountiesClaimed := make([]interfaces.BountyClaimed, 0)
+
+	for _, vLog := range logs {
+		votemarketContract, err := votemarketV2.NewVotemarketV2(vLog.Address, client)
+		if err != nil {
+			panic(err)
+		}
+
+		event, err := votemarketContract.ParseClaimed(vLog)
+		if err != nil {
+			fmt.Println(err)
+			continue
 		}
 
 		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
@@ -230,7 +288,8 @@ func fetchQuest() []interfaces.BountyClaimed {
 
 		event, err := questContract.ParseClaimed(vLog)
 		if err != nil {
-			panic(err)
+			fmt.Println(err)
+			continue
 		}
 
 		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
@@ -275,7 +334,8 @@ func fetchYBribe() []interfaces.BountyClaimed {
 	for _, vLog := range logs {
 		ybribeContract, err := yBribeV3.NewYBribeV3(vLog.Address, client)
 		if err != nil {
-			panic(err)
+			fmt.Println(err)
+			continue
 		}
 
 		event, err := ybribeContract.ParseRewardClaimed(vLog)
