@@ -27,7 +27,7 @@ import (
 )
 
 var VOTIUM_ADDRESSES = []common.Address{
-	common.HexToAddress("0x378Ba9B73309bE80BF4C2c027aAD799766a7ED5A"),
+	//common.HexToAddress("0x378Ba9B73309bE80BF4C2c027aAD799766a7ED5A"), => seems vlCVX
 	common.HexToAddress("0x34590960981f98b55d236b70E8B4d9929ad89C9c"),
 }
 
@@ -133,8 +133,19 @@ func main() {
 			}
 		}
 
+		bounty.CurrentPrice = price
+
 		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(bounty.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(bounty.TokenDecimals)))).Float64()
 		totalBountiesUSD += (amount * price)
+	}
+
+	file, err := json.Marshal(allClaimed)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(DATA_PATH, file, 0644); err != nil {
+		log.Fatal(err)
 	}
 
 	fmt.Println("Total bounties USD : ", fmt.Sprintf("%f", totalBountiesUSD))
@@ -168,7 +179,7 @@ func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
@@ -201,7 +212,7 @@ func fetchVotemarketV1(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
@@ -234,7 +245,7 @@ func fetchVotemarketV2(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
@@ -268,7 +279,7 @@ func fetchQuest(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
@@ -340,13 +351,13 @@ func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
 }
 
-func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaimed, rewardToken common.Address, blockNumber uint64, amount *big.Int, txHash common.Hash) []interfaces.BountyClaimed {
+func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaimed, contract common.Address, rewardToken common.Address, blockNumber uint64, amount *big.Int, txHash common.Hash) []interfaces.BountyClaimed {
 	decimals, err := getTokenDecimals(client, rewardToken)
 	if err != nil {
 		fmt.Println(err)
@@ -358,13 +369,19 @@ func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaim
 		panic(err)
 	}
 
+	timestamp := block.Time()
+
+	historicalPrice := getHistoricalPriceTokenPrice(rewardToken, timestamp)
+
 	bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-		TokenReward:   rewardToken,
-		Amount:        amount,
-		BlockNumber:   blockNumber,
-		Timestamp:     block.Time(),
-		TokenDecimals: decimals,
-		Tx:            txHash,
+		Contract:        contract,
+		TokenReward:     rewardToken,
+		Amount:          amount,
+		BlockNumber:     blockNumber,
+		Timestamp:       timestamp,
+		TokenDecimals:   decimals,
+		Tx:              txHash,
+		HistoricalPrice: historicalPrice,
 	})
 
 	return bountiesClaimed
@@ -447,4 +464,34 @@ func getTokenPriceFromGeckoterminal(token common.Address) float64 {
 		return 0
 	}
 	return price
+}
+
+func getHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float64 {
+
+	url := "https://coins.llama.fi/prices/historical/" + strconv.FormatUint(timestamp, 10) + "/ethereum:" + token.Hex()
+	response, err := http.Get(url)
+
+	// For limit rate
+	time.Sleep(500 * time.Millisecond)
+
+	if err != nil {
+		return 0
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return 0
+	}
+
+	defilammaPrice := new(interfaces.DefilammaPrice)
+	if err := json.Unmarshal(body, defilammaPrice); err != nil {
+		return 0
+	}
+
+	obj, exists := defilammaPrice.Coins["ethereum:"+token.Hex()]
+	if !exists {
+		return 0
+	}
+
+	return obj.Price
 }

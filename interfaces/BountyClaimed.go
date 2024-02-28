@@ -7,10 +7,13 @@ import (
 )
 
 type BountyClaimed struct {
-	TokenReward   common.Address `json:"tokenReward"`
-	TokenDecimals uint8          `json:"tokenDecimals"`
-	Amount        *big.Int       `json:"amount"`
-	Timestamp     uint64         `json:"timestamp"`
-	BlockNumber   uint64         `json:"blocknumber"`
-	Tx            common.Hash    `json:"tx"`
+	Contract        common.Address `json:"contract"`
+	TokenReward     common.Address `json:"tokenReward"`
+	TokenDecimals   uint8          `json:"tokenDecimals"`
+	Amount          *big.Int       `json:"amount"`
+	Timestamp       uint64         `json:"timestamp"`
+	BlockNumber     uint64         `json:"blocknumber"`
+	Tx              common.Hash    `json:"tx"`
+	HistoricalPrice float64        `json:"historicalPrice"`
+	CurrentPrice    float64        `json:"currentPrice"`
 }
