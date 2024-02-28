@@ -16,6 +16,8 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -51,25 +53,40 @@ var tokens = make(map[common.Address]uint8, 0)
 var tokenPrices = make(map[string]float64, 0)
 
 const RPC_URL = "/datastore/.ethereum/geth.ipc"
+const ALCHEMY_RPC_URL = ""
 const DATA_PATH = "./data.json"
 
 func main() {
+
+	if len(RPC_URL) == 0 {
+		fmt.Println("Main RPC url not set")
+	}
+
+	if len(ALCHEMY_RPC_URL) == 0 {
+		fmt.Println("Alchemy RPC url not set")
+		return
+	}
+
+	client, err := ethclient.Dial(RPC_URL)
+	if err != nil {
+		panic(err)
+	}
+
 	allClaimed := make([]interfaces.BountyClaimed, 0)
 
 	if _, err := os.Stat(DATA_PATH); err != nil {
 
 		fmt.Println("Fetching votium")
-		allClaimed = append(allClaimed, fetchVotium()...)
+		allClaimed = append(allClaimed, fetchVotium(client)...)
 
 		fmt.Println("Fetching votemarket")
-		allClaimed = append(allClaimed, fetchVotemarketV1()...)
-		allClaimed = append(allClaimed, fetchVotemarketV2()...)
+		allClaimed = append(allClaimed, fetchVotemarketV1(client)...)
+		allClaimed = append(allClaimed, fetchVotemarketV2(client)...)
 
 		fmt.Println("Fetching quest")
-		allClaimed = append(allClaimed, fetchQuest()...)
-
+		allClaimed = append(allClaimed, fetchQuest(client)...)
 		fmt.Println("Fetching yBribe")
-		allClaimed = append(allClaimed, fetchYBribe()...)
+		allClaimed = append(allClaimed, fetchYBribe(client)...)
 
 		file, err := json.Marshal(allClaimed)
 		if err != nil {
@@ -98,20 +115,32 @@ func main() {
 
 	totalBountiesUSD := 0.0
 	for _, bounty := range allClaimed {
-		tokenPrice := getTokenPrice(bounty.TokenReward)
+
+		price, exists := tokenPrices[bounty.TokenReward.Hex()]
+		if !exists {
+			tokenPrice := getTokenPrice(bounty.TokenReward)
+			if tokenPrice == 0 {
+				tokenPrice = getTokenPriceFromGeckoterminal(bounty.TokenReward)
+			}
+
+			tokenPrices[bounty.TokenReward.Hex()] = tokenPrice
+			price = tokenPrice
+
+			if tokenPrice == 0 {
+				fmt.Println("Price == 0 for ", bounty.TokenReward.Hex())
+				tokenPrices[bounty.TokenReward.Hex()] = 0
+				continue
+			}
+		}
 
 		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(bounty.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(bounty.TokenDecimals)))).Float64()
-		totalBountiesUSD += (amount * tokenPrice)
+		totalBountiesUSD += (amount * price)
 	}
 
 	fmt.Println("Total bounties USD : ", fmt.Sprintf("%f", totalBountiesUSD))
 }
 
-func fetchVotium() []interfaces.BountyClaimed {
-	client, err := ethclient.Dial(RPC_URL)
-	if err != nil {
-		panic(err)
-	}
+func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(13320169),
@@ -139,31 +168,13 @@ func fetchVotium() []interfaces.BountyClaimed {
 			continue
 		}
 
-		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
-		if err != nil {
-			panic(err)
-		}
-
-		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-			TokenReward:   event.Token,
-			Amount:        event.Amount,
-			BlockNumber:   vLog.BlockNumber,
-			Timestamp:     block.Time(),
-			TokenDecimals: getTokenDecimals(client, event.Token),
-			Tx:            vLog.TxHash,
-		})
+		bountiesClaimed = addClaim(client, bountiesClaimed, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
-
 }
 
-func fetchVotemarketV1() []interfaces.BountyClaimed {
-	client, err := ethclient.Dial(RPC_URL)
-	if err != nil {
-		panic(err)
-	}
-
+func fetchVotemarketV1(client *ethclient.Client) []interfaces.BountyClaimed {
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(16376672),
 		ToBlock:   nil, // Latest
@@ -190,31 +201,13 @@ func fetchVotemarketV1() []interfaces.BountyClaimed {
 			continue
 		}
 
-		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
-		if err != nil {
-			panic(err)
-		}
-
-		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-			TokenReward:   event.RewardToken,
-			Amount:        event.Amount,
-			BlockNumber:   vLog.BlockNumber,
-			Timestamp:     block.Time(),
-			TokenDecimals: getTokenDecimals(client, event.RewardToken),
-			Tx:            vLog.TxHash,
-		})
+		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
-
 }
 
-func fetchVotemarketV2() []interfaces.BountyClaimed {
-	client, err := ethclient.Dial(RPC_URL)
-	if err != nil {
-		panic(err)
-	}
-
+func fetchVotemarketV2(client *ethclient.Client) []interfaces.BountyClaimed {
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(16376672),
 		ToBlock:   nil, // Latest
@@ -241,30 +234,13 @@ func fetchVotemarketV2() []interfaces.BountyClaimed {
 			continue
 		}
 
-		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
-		if err != nil {
-			panic(err)
-		}
-
-		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-			TokenReward:   event.RewardToken,
-			Amount:        event.Amount,
-			BlockNumber:   vLog.BlockNumber,
-			Timestamp:     block.Time(),
-			TokenDecimals: getTokenDecimals(client, event.RewardToken),
-			Tx:            vLog.TxHash,
-		})
+		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
-
 }
 
-func fetchQuest() []interfaces.BountyClaimed {
-	client, err := ethclient.Dial(RPC_URL)
-	if err != nil {
-		panic(err)
-	}
+func fetchQuest(client *ethclient.Client) []interfaces.BountyClaimed {
 
 	query := ethereum.FilterQuery{
 		FromBlock: big.NewInt(14784921),
@@ -292,27 +268,15 @@ func fetchQuest() []interfaces.BountyClaimed {
 			continue
 		}
 
-		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
-		if err != nil {
-			panic(err)
-		}
-
-		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-			TokenReward:   event.RewardToken,
-			Amount:        event.Amount,
-			BlockNumber:   vLog.BlockNumber,
-			Timestamp:     block.Time(),
-			TokenDecimals: getTokenDecimals(client, event.RewardToken),
-			Tx:            vLog.TxHash,
-		})
+		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
 
 }
 
-func fetchYBribe() []interfaces.BountyClaimed {
-	client, err := ethclient.Dial(RPC_URL)
+func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
+	client2, err := ethclient.Dial(ALCHEMY_RPC_URL)
 	if err != nil {
 		panic(err)
 	}
@@ -343,51 +307,91 @@ func fetchYBribe() []interfaces.BountyClaimed {
 			panic(err)
 		}
 
-		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
+		receipt, err := client2.TransactionReceipt(context.Background(), vLog.TxHash)
 		if err != nil {
-			panic(err)
+			fmt.Println(err)
+			continue
 		}
 
-		bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
-			TokenReward:   event.RewardToken,
-			Amount:        event.Amount,
-			BlockNumber:   vLog.BlockNumber,
-			Timestamp:     block.Time(),
-			TokenDecimals: getTokenDecimals(client, event.RewardToken),
-			Tx:            vLog.TxHash,
-		})
+		found := false
+		for _, receiptLog := range receipt.Logs {
+			if strings.EqualFold(receiptLog.Topics[0].Hex(), common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef").Hex()) {
+				t, err := erc20.NewErc20(receiptLog.Address, client)
+				if err != nil {
+					continue
+				}
+
+				transfert, err := t.ParseTransfer(*receiptLog)
+				if err != nil {
+					continue
+				}
+
+				if transfert.Value.Cmp(event.Amount) != 0 {
+					continue
+				}
+
+				event.RewardToken = receiptLog.Address
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			continue
+		}
+
+		bountiesClaimed = addClaim(client, bountiesClaimed, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
 	}
 
 	return bountiesClaimed
 }
 
-func getTokenDecimals(client *ethclient.Client, token common.Address) uint8 {
+func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaimed, rewardToken common.Address, blockNumber uint64, amount *big.Int, txHash common.Hash) []interfaces.BountyClaimed {
+	decimals, err := getTokenDecimals(client, rewardToken)
+	if err != nil {
+		fmt.Println(err)
+		return bountiesClaimed
+	}
+
+	block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(blockNumber)))
+	if err != nil {
+		panic(err)
+	}
+
+	bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
+		TokenReward:   rewardToken,
+		Amount:        amount,
+		BlockNumber:   blockNumber,
+		Timestamp:     block.Time(),
+		TokenDecimals: decimals,
+		Tx:            txHash,
+	})
+
+	return bountiesClaimed
+}
+
+func getTokenDecimals(client *ethclient.Client, token common.Address) (uint8, error) {
 	decimals, exists := tokens[token]
 	if exists {
-		return decimals
+		return decimals, nil
 	}
 
 	tokenContract, err := erc20.NewErc20(token, client)
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 
 	tokenDecimals, err := tokenContract.Decimals(nil)
 	if err != nil {
-		panic(err)
+		return 0, err
 	}
 
 	tokens[token] = tokenDecimals
 
-	return tokenDecimals
+	return tokenDecimals, nil
 }
 
 func getTokenPrice(token common.Address) float64 {
-
-	price, exists := tokenPrices[token.Hex()]
-	if exists {
-		return price
-	}
 
 	url := "https://coins.llama.fi/prices/current/ethereum:" + token.Hex()
 	response, err := http.Get(url)
@@ -406,18 +410,41 @@ func getTokenPrice(token common.Address) float64 {
 
 	defilammaPrice := new(interfaces.DefilammaPrice)
 	if err := json.Unmarshal(body, defilammaPrice); err != nil {
-		fmt.Println("Error for token price", token.Hex(), url)
-		tokenPrices[token.Hex()] = 0
 		return 0
 	}
 
 	obj, exists := defilammaPrice.Coins["ethereum:"+token.Hex()]
 	if !exists {
-		fmt.Println("Error for token price", token.Hex(), url)
-		tokenPrices[token.Hex()] = 0
 		return 0
 	}
 
-	tokenPrices[token.Hex()] = obj.Price
 	return obj.Price
+}
+
+func getTokenPriceFromGeckoterminal(token common.Address) float64 {
+
+	response, err := http.Get("https://api.geckoterminal.com/api/v2/networks/eth/tokens/" + token.Hex() + "?include=top_pools")
+
+	if err != nil {
+		fmt.Println(err)
+		return 0
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		fmt.Println(err)
+		return 0
+	}
+
+	geckoterminal := new(interfaces.Geckoterminal)
+	if err := json.Unmarshal(body, geckoterminal); err != nil {
+		return 0
+	}
+
+	price, err := strconv.ParseFloat(geckoterminal.Data.Attributes.PriceUSD, 64)
+	if err != nil {
+		fmt.Println(err)
+		return 0
+	}
+	return price
 }
