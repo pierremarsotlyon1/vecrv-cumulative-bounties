@@ -16,4 +16,5 @@ type BountyClaimed struct {
 	Tx              common.Hash    `json:"tx"`
 	HistoricalPrice float64        `json:"historicalPrice"`
 	CurrentPrice    float64        `json:"currentPrice"`
+	Comment         string         `json:"comment"`
 }

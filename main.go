@@ -10,7 +10,9 @@ import (
 	"main/contracts/questDistributor"
 	"main/contracts/votemarketV1"
 	"main/contracts/votemarketV2"
-	"main/contracts/votiumMerkle"
+	"main/contracts/votiumVECrv"
+	"main/contracts/votiumVLCVXOld"
+	"main/contracts/votiumVLCVXV2"
 	"main/contracts/yBribeV3"
 	"main/interfaces"
 	"math/big"
@@ -26,9 +28,16 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-var VOTIUM_ADDRESSES = []common.Address{
-	//common.HexToAddress("0x378Ba9B73309bE80BF4C2c027aAD799766a7ED5A"), => seems vlCVX
-	common.HexToAddress("0x34590960981f98b55d236b70E8B4d9929ad89C9c"),
+var VOTIUM_VE_CRV_ADDRESSES = []common.Address{
+	common.HexToAddress("0xB4Fb1FD4AEC780BC255bF231189E9A244475d260"),
+}
+
+var VOTIUM_VL_CVX_V1_ADDRESSES = []common.Address{
+	common.HexToAddress("0x19BBC3463Dd8d07f55438014b021Fb457EBD4595"),
+}
+
+var VOTIUM_VL_CVX_V2_ADDRESSES = []common.Address{
+	common.HexToAddress("0x63942E31E98f1833A234077f47880A66136a2D1e"),
 }
 
 var VOTEMARKET_ADDRESSES_V1 = []common.Address{
@@ -47,6 +56,10 @@ var QUEST_ADDRESSES = []common.Address{
 
 var YBRIBE_ADDRESSES = []common.Address{
 	common.HexToAddress("0x03dFdBcD4056E2F92251c7B07423E1a33a7D3F6d"),
+}
+
+var BRIBE_CRV_FINANCE_ADDRESSES = []common.Address{
+	common.HexToAddress("0x7893bbb46613d7a4fbcc31dab4c9b823ffee1026"),
 }
 
 var tokens = make(map[common.Address]uint8, 0)
@@ -85,7 +98,11 @@ func main() {
 
 		fmt.Println("Fetching quest")
 		allClaimed = append(allClaimed, fetchQuest(client)...)
+
 		fmt.Println("Fetching yBribe")
+		allClaimed = append(allClaimed, fetchYBribe(client)...)
+
+		fmt.Println("Fetching bribe crv finance")
 		allClaimed = append(allClaimed, fetchYBribe(client)...)
 
 		file, err := json.Marshal(allClaimed)
@@ -111,9 +128,14 @@ func main() {
 		}
 	}
 
+	fmt.Println("Fetching bribe crv finance")
+	allClaimed = append(allClaimed, fetchBribeCrvFinance(client)...)
+
 	fmt.Println(len(allClaimed), " claims found")
 
 	totalBountiesUSD := 0.0
+	totalVeCRVBountiesUSD := 0.0
+	totalVlCVXBountiesUSD := 0.0
 	for _, bounty := range allClaimed {
 
 		price, exists := tokenPrices[bounty.TokenReward.Hex()]
@@ -136,7 +158,14 @@ func main() {
 		bounty.CurrentPrice = price
 
 		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(bounty.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(bounty.TokenDecimals)))).Float64()
-		totalBountiesUSD += (amount * price)
+		bountyAmount := (amount * price)
+
+		totalBountiesUSD += bountyAmount
+		if bounty.Comment == "vlCVX" {
+			totalVlCVXBountiesUSD += bountyAmount
+		} else {
+			totalVeCRVBountiesUSD += bountyAmount
+		}
 	}
 
 	file, err := json.Marshal(allClaimed)
@@ -148,16 +177,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Total bounties USD : ", fmt.Sprintf("%f", totalBountiesUSD))
+	fmt.Println("Total bounties USD (veCRV + vlCVX): ", fmt.Sprintf("%f", totalBountiesUSD))
+	fmt.Println("Total veCRV bounties USD : ", fmt.Sprintf("%f", totalVeCRVBountiesUSD))
+	fmt.Println("Total vlCVX bounties USD : ", fmt.Sprintf("%f", totalVlCVXBountiesUSD))
 }
 
 func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 
+	// veCRV
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(13320169),
+		FromBlock: big.NewInt(14730004),
 		ToBlock:   nil, // Latest
-		Addresses: VOTIUM_ADDRESSES,
-		Topics:    [][]common.Hash{{common.HexToHash("0x4766921f5c59646d22d7d266a29164c8e9623684d8dfdbd931731dfdca025238")}},
+		Addresses: VOTIUM_VE_CRV_ADDRESSES,
+		Topics:    [][]common.Hash{{common.HexToHash("0x51c8cd367a987b8c2f652c101ea7076ec8e4dfd33c4c77bb80e018e7143b6512")}},
 	}
 
 	logs, err := client.FilterLogs(context.Background(), query)
@@ -168,18 +200,74 @@ func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 	bountiesClaimed := make([]interfaces.BountyClaimed, 0)
 
 	for _, vLog := range logs {
-		votiumContract, err := votiumMerkle.NewVotiumMerkle(vLog.Address, client)
+		votiumContract, err := votiumVECrv.NewVotiumVECrv(vLog.Address, client)
 		if err != nil {
 			panic(err)
 		}
 
-		event, err := votiumContract.ParseClaimed(vLog)
+		event, err := votiumContract.ParseNewReward(vLog)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash, "")
+	}
+
+	// vlCVX (old)
+	query = ethereum.FilterQuery{
+		FromBlock: big.NewInt(13209937),
+		ToBlock:   nil, // Latest
+		Addresses: VOTIUM_VL_CVX_V1_ADDRESSES,
+		Topics:    [][]common.Hash{{common.HexToHash("0x74bd0b58587a15767427910140bcf99db1ef7f905cb0a2983a72cd2033954227")}},
+	}
+
+	logs, err = client.FilterLogs(context.Background(), query)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, vLog := range logs {
+		votiumContract, err := votiumVLCVXOld.NewVotiumVLCVXOld(vLog.Address, client)
+		if err != nil {
+			panic(err)
+		}
+
+		event, err := votiumContract.ParseBribed(vLog)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash, "vlCVX")
+	}
+
+	// vlCVX V2
+	query = ethereum.FilterQuery{
+		FromBlock: big.NewInt(18043767),
+		ToBlock:   nil, // Latest
+		Addresses: VOTIUM_VL_CVX_V2_ADDRESSES,
+		Topics:    [][]common.Hash{{common.HexToHash("0x7c0c0ef7f1ccead819631ed9c10b0728e76274ee5572b53716ea96e7ec735ffa")}},
+	}
+
+	logs, err = client.FilterLogs(context.Background(), query)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, vLog := range logs {
+		votiumContract, err := votiumVLCVXV2.NewVotiumVLCVXV2(vLog.Address, client)
+		if err != nil {
+			panic(err)
+		}
+
+		event, err := votiumContract.ParseNewIncentive(vLog)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash, "vlCVX")
 	}
 
 	return bountiesClaimed
@@ -212,7 +300,7 @@ func fetchVotemarketV1(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash, "")
 	}
 
 	return bountiesClaimed
@@ -245,7 +333,7 @@ func fetchVotemarketV2(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash, "")
 	}
 
 	return bountiesClaimed
@@ -279,7 +367,7 @@ func fetchQuest(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash, "")
 	}
 
 	return bountiesClaimed
@@ -351,13 +439,54 @@ func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
 			continue
 		}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash)
+		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.RewardToken, vLog.BlockNumber, event.Amount, vLog.TxHash, "")
 	}
 
 	return bountiesClaimed
 }
 
-func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaimed, contract common.Address, rewardToken common.Address, blockNumber uint64, amount *big.Int, txHash common.Hash) []interfaces.BountyClaimed {
+func fetchBribeCrvFinance(client *ethclient.Client) []interfaces.BountyClaimed {
+
+	bountiesClaimed := make([]interfaces.BountyClaimed, 0)
+
+	// Fetching transfert event
+	for _, scAddress := range BRIBE_CRV_FINANCE_ADDRESSES {
+		query := ethereum.FilterQuery{
+			FromBlock: big.NewInt(13016019),
+			ToBlock:   big.NewInt(16985718),
+			Addresses: []common.Address{scAddress},
+			Topics:    [][]common.Hash{{common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")}},
+		}
+
+		logs, err := client.FilterLogs(context.Background(), query)
+		if err != nil {
+			panic(err)
+		}
+
+		for _, vLog := range logs {
+			erc20Contract, err := erc20.NewErc20(vLog.Address, client)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+
+			event, err := erc20Contract.ParseTransfer(vLog)
+			if err != nil {
+				panic(err)
+			}
+
+			if !strings.EqualFold(event.From.Hex(), scAddress.Hex()) {
+				continue
+			}
+
+			bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, vLog.Address, vLog.BlockNumber, event.Value, vLog.TxHash, "")
+		}
+	}
+
+	return bountiesClaimed
+}
+
+func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaimed, contract common.Address, rewardToken common.Address, blockNumber uint64, amount *big.Int, txHash common.Hash, comment string) []interfaces.BountyClaimed {
 	decimals, err := getTokenDecimals(client, rewardToken)
 	if err != nil {
 		fmt.Println(err)
@@ -382,6 +511,7 @@ func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaim
 		TokenDecimals:   decimals,
 		Tx:              txHash,
 		HistoricalPrice: historicalPrice,
+		Comment:         comment,
 	})
 
 	return bountiesClaimed
@@ -469,29 +599,41 @@ func getTokenPriceFromGeckoterminal(token common.Address) float64 {
 func getHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float64 {
 
 	url := "https://coins.llama.fi/prices/historical/" + strconv.FormatUint(timestamp, 10) + "/ethereum:" + token.Hex()
+
+	price, exists := tokenPrices[url]
+	if exists {
+		return price
+	}
+
 	response, err := http.Get(url)
 
 	// For limit rate
 	time.Sleep(500 * time.Millisecond)
 
 	if err != nil {
+		tokenPrices[url] = 0
 		return 0
 	}
 
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
+		tokenPrices[url] = 0
 		return 0
 	}
 
 	defilammaPrice := new(interfaces.DefilammaPrice)
 	if err := json.Unmarshal(body, defilammaPrice); err != nil {
+		tokenPrices[url] = 0
 		return 0
 	}
 
 	obj, exists := defilammaPrice.Coins["ethereum:"+token.Hex()]
 	if !exists {
+		tokenPrices[url] = 0
 		return 0
 	}
+
+	tokenPrices[url] = obj.Price
 
 	return obj.Price
 }
