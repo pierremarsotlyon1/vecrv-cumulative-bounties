@@ -103,7 +103,7 @@ func main() {
 		allClaimed = append(allClaimed, fetchYBribe(client)...)
 
 		fmt.Println("Fetching bribe crv finance")
-		allClaimed = append(allClaimed, fetchYBribe(client)...)
+		allClaimed = append(allClaimed, fetchBribeCrvFinance(client)...)
 
 		file, err := json.Marshal(allClaimed)
 		if err != nil {
@@ -127,9 +127,6 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-
-	fmt.Println("Fetching bribe crv finance")
-	allClaimed = append(allClaimed, fetchBribeCrvFinance(client)...)
 
 	fmt.Println(len(allClaimed), " claims found")
 
