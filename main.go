@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,11 +67,20 @@ var tokens = make(map[common.Address]uint8, 0)
 var tokenPrices = make(map[string]float64, 0)
 
 const RPC_URL = "/datastore/.ethereum/geth.ipc"
-const ALCHEMY_RPC_URL = ""
+
+const ALCHEMY_APIKEY = ""
+const ALCHEMY_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
+
 const DATA_PATH = "./data.json"
 
-func main() {
+const VOTIUM_PATH = "./votium.json"
+const VOTEMARKET_V1_PATH = "./votium-vm.json"
+const VOTEMARKET_V2_PATH = "./votium-vm-vm2.json"
+const QUEST_PATH = "./votium-vm-vm2-quest.json"
+const YBRIBE_PATH = "./votium-vm-vm2-quest-ybribe.json"
+const BRIBE_CRV_FINANCE = "./votium-vm-vm2-quest-bribecrvfinance.json"
 
+func main() {
 	if len(RPC_URL) == 0 {
 		fmt.Println("Main RPC url not set")
 	}
@@ -87,45 +97,65 @@ func main() {
 
 	allClaimed := make([]interfaces.BountyClaimed, 0)
 
-	if _, err := os.Stat(DATA_PATH); err != nil {
-
+	if !fileExists(VOTIUM_PATH) {
 		fmt.Println("Fetching votium")
 		allClaimed = append(allClaimed, fetchVotium(client)...)
+		write(VOTIUM_PATH, allClaimed)
+	} else {
+		allClaimed = read(VOTIUM_PATH)
+	}
 
-		fmt.Println("Fetching votemarket")
+	if !fileExists(VOTEMARKET_V1_PATH) {
+		fmt.Println("Fetching votemarket v1")
 		allClaimed = append(allClaimed, fetchVotemarketV1(client)...)
-		allClaimed = append(allClaimed, fetchVotemarketV2(client)...)
+		write(VOTEMARKET_V1_PATH, allClaimed)
+	} else {
+		allClaimed = read(VOTEMARKET_V1_PATH)
+	}
 
+	if !fileExists(VOTEMARKET_V2_PATH) {
+		fmt.Println("Fetching votemarket v2")
+		allClaimed = append(allClaimed, fetchVotemarketV2(client)...)
+		write(VOTEMARKET_V2_PATH, allClaimed)
+	} else {
+		allClaimed = read(VOTEMARKET_V2_PATH)
+	}
+
+	if !fileExists(QUEST_PATH) {
 		fmt.Println("Fetching quest")
 		allClaimed = append(allClaimed, fetchQuest(client)...)
+		write(QUEST_PATH, allClaimed)
+	} else {
+		allClaimed = read(QUEST_PATH)
+	}
 
+	if !fileExists(YBRIBE_PATH) {
 		fmt.Println("Fetching yBribe")
 		allClaimed = append(allClaimed, fetchYBribe(client)...)
+		write(YBRIBE_PATH, allClaimed)
+	} else {
+		allClaimed = read(YBRIBE_PATH)
+	}
 
+	if !fileExists(BRIBE_CRV_FINANCE) {
 		fmt.Println("Fetching bribe crv finance")
 		allClaimed = append(allClaimed, fetchBribeCrvFinance(client)...)
-
-		file, err := json.Marshal(allClaimed)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if _, err := os.Create(DATA_PATH); err != nil {
-			log.Fatal(err)
-		}
-
-		if err := os.WriteFile(DATA_PATH, file, 0644); err != nil {
-			log.Fatal(err)
-		}
+		write(BRIBE_CRV_FINANCE, allClaimed)
 	} else {
-		file, err := os.ReadFile(DATA_PATH)
-		if err != nil {
-			log.Fatal(err)
-		}
+		allClaimed = read(BRIBE_CRV_FINANCE)
+	}
 
-		if err := json.Unmarshal([]byte(file), &allClaimed); err != nil {
-			log.Fatal(err)
-		}
+	file, err := json.Marshal(allClaimed)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if _, err := os.Create(DATA_PATH); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(DATA_PATH, file, 0644); err != nil {
+		log.Fatal(err)
 	}
 
 	fmt.Println(len(allClaimed), " claims found")
@@ -165,7 +195,7 @@ func main() {
 		}
 	}
 
-	file, err := json.Marshal(allClaimed)
+	file, err = json.Marshal(allClaimed)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -445,38 +475,84 @@ func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
 func fetchBribeCrvFinance(client *ethclient.Client) []interfaces.BountyClaimed {
 
 	bountiesClaimed := make([]interfaces.BountyClaimed, 0)
+	pageKey := ""
 
-	// Fetching transfert event
-	for _, scAddress := range BRIBE_CRV_FINANCE_ADDRESSES {
-		query := ethereum.FilterQuery{
-			FromBlock: big.NewInt(13016019),
-			ToBlock:   big.NewInt(16985718),
-			Addresses: []common.Address{scAddress},
-			Topics:    [][]common.Hash{{common.HexToHash("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")}},
+	for {
+		posturl := "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
+
+		query := `{
+			"id": 1,
+			"jsonrpc": "2.0",
+			"method": "alchemy_getAssetTransfers",
+			"params": [
+			{
+				"fromBlock": "0x0",
+				"toBlock": "latest",
+				"withMetadata": false,
+				"excludeZeroValue": true,
+				"maxCount": "0x3e8",
+				"fromAddress": "0x7893bbb46613d7a4FbcC31Dab4C9b823FfeE1026",
+				"category": [
+				"erc20"
+				],
+				"order": "asc"
+		`
+		if len(pageKey) > 0 {
+			query += ",\"pageKey\":\"" + pageKey + "\""
 		}
 
-		logs, err := client.FilterLogs(context.Background(), query)
+		query += `
+				}
+				]
+			}
+		`
+
+		body := []byte(query)
+
+		r, err := http.NewRequest("POST", posturl, bytes.NewBuffer(body))
 		if err != nil {
 			panic(err)
 		}
 
-		for _, vLog := range logs {
-			erc20Contract, err := erc20.NewErc20(vLog.Address, client)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
+		r.Header.Add("Content-Type", "application/json")
+		r.Header.Add("accept", "application/json")
 
-			event, err := erc20Contract.ParseTransfer(vLog)
+		httpClient := &http.Client{}
+		res, err := httpClient.Do(r)
+		if err != nil {
+			panic(err)
+		}
+
+		defer res.Body.Close()
+
+		post := new(interfaces.AlchemyTransfers)
+		derr := json.NewDecoder(res.Body).Decode(post)
+		if derr != nil {
+			panic(derr)
+		}
+
+		if res.StatusCode != http.StatusOK {
+			panic(res.Status)
+		}
+
+		pageKey = post.Result.PageKey
+
+		for _, transfer := range post.Result.Transfers {
+			blockNumber, err := strconv.ParseInt(transfer.BlockNum[2:], 16, 64)
 			if err != nil {
 				panic(err)
 			}
 
-			if !strings.EqualFold(event.From.Hex(), scAddress.Hex()) {
-				continue
+			value, success := big.NewInt(0).SetString(transfer.RawContract.Value[2:], 16)
+			if !success {
+				panic("Error convert hex")
 			}
 
-			bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, vLog.Address, vLog.BlockNumber, event.Value, vLog.TxHash, "")
+			bountiesClaimed = addClaim(client, bountiesClaimed, common.HexToAddress(transfer.From), common.HexToAddress(transfer.RawContract.Address), uint64(blockNumber), value, common.HexToHash(transfer.Hash), "")
+		}
+
+		if len(pageKey) == 0 {
+			break
 		}
 	}
 
@@ -633,4 +709,37 @@ func getHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float6
 	tokenPrices[url] = obj.Price
 
 	return obj.Price
+}
+
+func write(fileName string, claimed []interfaces.BountyClaimed) {
+	file, err := json.Marshal(claimed)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(fileName, file, 0644); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func fileExists(fileName string) bool {
+	if _, err := os.Stat(fileName); err != nil {
+		return false
+	}
+
+	return true
+}
+
+func read(fileName string) []interfaces.BountyClaimed {
+	file, err := os.ReadFile(fileName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	allClaimed := make([]interfaces.BountyClaimed, 0)
+	if err := json.Unmarshal([]byte(file), &allClaimed); err != nil {
+		log.Fatal(err)
+	}
+
+	return allClaimed
 }
