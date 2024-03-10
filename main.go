@@ -19,6 +19,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -71,14 +72,15 @@ const RPC_URL = "/datastore/.ethereum/geth.ipc"
 const ALCHEMY_APIKEY = ""
 const ALCHEMY_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
 
-const DATA_PATH = "./data.json"
+// time
+const MIN_TO_SEC = uint64(60)
+const HOUR_TO_SEC = 60 * MIN_TO_SEC
+const DAY_TO_SEC = HOUR_TO_SEC * 24
 
-const VOTIUM_PATH = "./votium.json"
-const VOTEMARKET_V1_PATH = "./votium-vm.json"
-const VOTEMARKET_V2_PATH = "./votium-vm-vm2.json"
-const QUEST_PATH = "./votium-vm-vm2-quest.json"
-const YBRIBE_PATH = "./votium-vm-vm2-quest-ybribe.json"
-const BRIBE_CRV_FINANCE = "./votium-vm-vm2-quest-bribecrvfinance.json"
+// json files
+const DATA_PATH = "./data.json"
+const CONFIG_PATH = "./config.json"
+const STATS_PATH = "./stats.json"
 
 func main() {
 	if len(RPC_URL) == 0 {
@@ -95,70 +97,40 @@ func main() {
 		panic(err)
 	}
 
+	currentBlock, err := client.BlockNumber(context.Background())
+	if err != nil {
+		panic(err)
+	}
+
+	config := readConfig()
+
 	allClaimed := make([]interfaces.BountyClaimed, 0)
 
-	if !fileExists(VOTIUM_PATH) {
-		fmt.Println("Fetching votium")
-		allClaimed = append(allClaimed, fetchVotium(client)...)
-		write(VOTIUM_PATH, allClaimed)
-	} else {
-		allClaimed = read(VOTIUM_PATH)
-	}
+	previousClaims := read(DATA_PATH)
+	allClaimed = append(allClaimed, previousClaims...)
 
-	if !fileExists(VOTEMARKET_V1_PATH) {
-		fmt.Println("Fetching votemarket v1")
-		allClaimed = append(allClaimed, fetchVotemarketV1(client)...)
-		write(VOTEMARKET_V1_PATH, allClaimed)
-	} else {
-		allClaimed = read(VOTEMARKET_V1_PATH)
-	}
+	fmt.Println("Fetching votium")
+	allClaimed = append(allClaimed, fetchVotium(client, currentBlock, config)...)
 
-	if !fileExists(VOTEMARKET_V2_PATH) {
-		fmt.Println("Fetching votemarket v2")
-		allClaimed = append(allClaimed, fetchVotemarketV2(client)...)
-		write(VOTEMARKET_V2_PATH, allClaimed)
-	} else {
-		allClaimed = read(VOTEMARKET_V2_PATH)
-	}
+	fmt.Println("Fetching votemarket v1")
+	allClaimed = append(allClaimed, fetchVotemarketV1(client, currentBlock, config)...)
 
-	if !fileExists(QUEST_PATH) {
-		fmt.Println("Fetching quest")
-		allClaimed = append(allClaimed, fetchQuest(client)...)
-		write(QUEST_PATH, allClaimed)
-	} else {
-		allClaimed = read(QUEST_PATH)
-	}
+	fmt.Println("Fetching votemarket v2")
+	allClaimed = append(allClaimed, fetchVotemarketV2(client, currentBlock, config)...)
 
-	if !fileExists(YBRIBE_PATH) {
-		fmt.Println("Fetching yBribe")
-		allClaimed = append(allClaimed, fetchYBribe(client)...)
-		write(YBRIBE_PATH, allClaimed)
-	} else {
-		allClaimed = read(YBRIBE_PATH)
-	}
+	fmt.Println("Fetching quest")
+	allClaimed = append(allClaimed, fetchQuest(client, currentBlock, config)...)
 
-	if !fileExists(BRIBE_CRV_FINANCE) {
-		fmt.Println("Fetching bribe crv finance")
-		allClaimed = append(allClaimed, fetchBribeCrvFinance(client)...)
-		write(BRIBE_CRV_FINANCE, allClaimed)
-	} else {
-		allClaimed = read(BRIBE_CRV_FINANCE)
-	}
+	fmt.Println("Fetching yBribe")
+	allClaimed = append(allClaimed, fetchYBribe(client, currentBlock, config)...)
 
-	file, err := json.Marshal(allClaimed)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if _, err := os.Create(DATA_PATH); err != nil {
-		log.Fatal(err)
-	}
-
-	if err := os.WriteFile(DATA_PATH, file, 0644); err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println("Fetching bribe crv finance")
+	allClaimed = append(allClaimed, fetchBribeCrvFinance(client, currentBlock, config)...)
 
 	fmt.Println(len(allClaimed), " claims found")
+
+	config.LastBlock = currentBlock
+	writeConfig(config)
 
 	totalBountiesUSD := 0.0
 	totalVeCRVBountiesUSD := 0.0
@@ -188,33 +160,48 @@ func main() {
 		bountyAmount := (amount * price)
 
 		totalBountiesUSD += bountyAmount
-		if bounty.Comment == "vlCVX" {
+		if isVlCVX(bounty) {
 			totalVlCVXBountiesUSD += bountyAmount
 		} else {
 			totalVeCRVBountiesUSD += bountyAmount
 		}
 	}
 
-	file, err = json.Marshal(allClaimed)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := os.WriteFile(DATA_PATH, file, 0644); err != nil {
-		log.Fatal(err)
-	}
+	write(DATA_PATH, allClaimed)
 
 	fmt.Println("Total bounties USD (veCRV + vlCVX): ", fmt.Sprintf("%f", totalBountiesUSD))
 	fmt.Println("Total veCRV bounties USD : ", fmt.Sprintf("%f", totalVeCRVBountiesUSD))
 	fmt.Println("Total vlCVX bounties USD : ", fmt.Sprintf("%f", totalVlCVXBountiesUSD))
+
+	// Sort claims by timestamp DESC
+	sort.Slice(allClaimed, func(i, j int) bool { return allClaimed[i].Timestamp < allClaimed[j].Timestamp })
+	timestampStart := allClaimed[0].Timestamp
+
+	var stats interfaces.Stats
+
+	stats.TotalClaimed = totalBountiesUSD
+	stats.VeCRVTotalClaimed = totalVeCRVBountiesUSD
+	stats.VlCVXTotalClaimed = totalVlCVXBountiesUSD
+
+	stats.ClaimsLast7Days = generateDaysData(allClaimed, timestampStart, timestampStart-7*DAY_TO_SEC, 25*MIN_TO_SEC)
+	stats.ClaimsLast30Days = generateDaysData(allClaimed, timestampStart, timestampStart-30*DAY_TO_SEC, 2*HOUR_TO_SEC)
+	stats.ClaimsLast180Days = generateDaysData(allClaimed, timestampStart, timestampStart-180*DAY_TO_SEC, 12*HOUR_TO_SEC)
+	stats.ClaimsLast365Days = generateDaysData(allClaimed, timestampStart, timestampStart-365*DAY_TO_SEC, DAY_TO_SEC)
+	stats.ClaimsSinceInception = generateDaysData(allClaimed, timestampStart, 0, 2*DAY_TO_SEC)
+
+	writeStats(stats)
 }
 
-func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchVotium(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
 
 	// veCRV
+	from := config.LastBlock
+	if from == 0 {
+		from = 14730004
+	}
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(14730004),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTIUM_VE_CRV_ADDRESSES,
 		Topics:    [][]common.Hash{{common.HexToHash("0x51c8cd367a987b8c2f652c101ea7076ec8e4dfd33c4c77bb80e018e7143b6512")}},
 	}
@@ -242,9 +229,13 @@ func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 	}
 
 	// vlCVX (old)
+	from = config.LastBlock
+	if from == 0 {
+		from = 13209937
+	}
 	query = ethereum.FilterQuery{
-		FromBlock: big.NewInt(13209937),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTIUM_VL_CVX_V1_ADDRESSES,
 		Topics:    [][]common.Hash{{common.HexToHash("0x74bd0b58587a15767427910140bcf99db1ef7f905cb0a2983a72cd2033954227")}},
 	}
@@ -270,9 +261,13 @@ func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 	}
 
 	// vlCVX V2
+	from = config.LastBlock
+	if from == 0 {
+		from = 18043767
+	}
 	query = ethereum.FilterQuery{
-		FromBlock: big.NewInt(18043767),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTIUM_VL_CVX_V2_ADDRESSES,
 		Topics:    [][]common.Hash{{common.HexToHash("0x7c0c0ef7f1ccead819631ed9c10b0728e76274ee5572b53716ea96e7ec735ffa")}},
 	}
@@ -300,10 +295,15 @@ func fetchVotium(client *ethclient.Client) []interfaces.BountyClaimed {
 	return bountiesClaimed
 }
 
-func fetchVotemarketV1(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchVotemarketV1(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
+
+	from := config.LastBlock
+	if from == 0 {
+		from = 16376672
+	}
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(16376672),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTEMARKET_ADDRESSES_V1,
 		Topics:    [][]common.Hash{{common.HexToHash("0x6f9c9826be5976f3f82a3490c52a83328ce2ec7be9e62dcb39c26da5148d7c76")}},
 	}
@@ -333,10 +333,15 @@ func fetchVotemarketV1(client *ethclient.Client) []interfaces.BountyClaimed {
 	return bountiesClaimed
 }
 
-func fetchVotemarketV2(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchVotemarketV2(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
+
+	from := config.LastBlock
+	if from == 0 {
+		from = 16376672
+	}
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(16376672),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTEMARKET_ADDRESSES_V2,
 		Topics:    [][]common.Hash{{common.HexToHash("0x6f9c9826be5976f3f82a3490c52a83328ce2ec7be9e62dcb39c26da5148d7c76")}},
 	}
@@ -366,11 +371,15 @@ func fetchVotemarketV2(client *ethclient.Client) []interfaces.BountyClaimed {
 	return bountiesClaimed
 }
 
-func fetchQuest(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchQuest(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
 
+	from := config.LastBlock
+	if from == 0 {
+		from = 14784921
+	}
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(14784921),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: QUEST_ADDRESSES,
 		Topics:    [][]common.Hash{{common.HexToHash("0x9a5376f7dcf8631c2b6249c9bec3d715cb97bdd4c82d92e55d147f6b4eea4197")}},
 	}
@@ -401,15 +410,19 @@ func fetchQuest(client *ethclient.Client) []interfaces.BountyClaimed {
 
 }
 
-func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchYBribe(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
 	client2, err := ethclient.Dial(ALCHEMY_RPC_URL)
 	if err != nil {
 		panic(err)
 	}
 
+	from := config.LastBlock
+	if from == 0 {
+		from = 15878262
+	}
 	query := ethereum.FilterQuery{
-		FromBlock: big.NewInt(15878262),
-		ToBlock:   nil, // Latest
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: YBRIBE_ADDRESSES,
 		Topics:    [][]common.Hash{{common.HexToHash("0x2422cac5e23c46c890fdcf42d0c64757409df6832174df639337558f09d99c68")}},
 	}
@@ -472,10 +485,13 @@ func fetchYBribe(client *ethclient.Client) []interfaces.BountyClaimed {
 	return bountiesClaimed
 }
 
-func fetchBribeCrvFinance(client *ethclient.Client) []interfaces.BountyClaimed {
+func fetchBribeCrvFinance(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
 
 	bountiesClaimed := make([]interfaces.BountyClaimed, 0)
 	pageKey := ""
+
+	hexLastBlock := fmt.Sprintf("%x", config.LastBlock)
+	hexCurrentBlock := fmt.Sprintf("%x", currentBlock)
 
 	for {
 		posturl := "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
@@ -486,8 +502,8 @@ func fetchBribeCrvFinance(client *ethclient.Client) []interfaces.BountyClaimed {
 			"method": "alchemy_getAssetTransfers",
 			"params": [
 			{
-				"fromBlock": "0x0",
-				"toBlock": "latest",
+				"fromBlock": "0x` + hexLastBlock + `",
+				"toBlock": "0x` + hexCurrentBlock + `",
 				"withMetadata": false,
 				"excludeZeroValue": true,
 				"maxCount": "0x3e8",
@@ -611,6 +627,51 @@ func getTokenDecimals(client *ethclient.Client, token common.Address) (uint8, er
 	return tokenDecimals, nil
 }
 
+func generateDaysData(allClaimed []interfaces.BountyClaimed, start uint64, end uint64, interval uint64) interfaces.StatsClaim {
+	var statsClaim interfaces.StatsClaim
+	statsClaim.Claims = make([]interfaces.Claim, 0)
+
+	current := start
+	currentTotalBountyDollarAmount := 0.0
+
+	for _, claimed := range allClaimed {
+		if claimed.Timestamp < end {
+			break
+		}
+
+		if current-interval > claimed.Timestamp {
+			statsClaim.Claims = append(statsClaim.Claims, interfaces.Claim{
+				Timestamp: current,
+				Value:     currentTotalBountyDollarAmount,
+			})
+
+			current = claimed.Timestamp
+			currentTotalBountyDollarAmount = 0.0
+		}
+
+		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(claimed.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(claimed.TokenDecimals)))).Float64()
+		bountyDollarAmount := (amount * claimed.HistoricalPrice)
+
+		statsClaim.TotalClaimed += bountyDollarAmount
+		if isVlCVX(claimed) {
+			statsClaim.VlCVXTotalClaimed += bountyDollarAmount
+		} else {
+			statsClaim.VeCRVTotalClaimed += bountyDollarAmount
+		}
+
+		currentTotalBountyDollarAmount += bountyDollarAmount
+	}
+
+	if currentTotalBountyDollarAmount > 0 {
+		statsClaim.Claims = append(statsClaim.Claims, interfaces.Claim{
+			Timestamp: current,
+			Value:     currentTotalBountyDollarAmount,
+		})
+	}
+
+	return statsClaim
+}
+
 func getTokenPrice(token common.Address) float64 {
 
 	url := "https://coins.llama.fi/prices/current/ethereum:" + token.Hex()
@@ -711,6 +772,10 @@ func getHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float6
 	return obj.Price
 }
 
+func isVlCVX(bounty interfaces.BountyClaimed) bool {
+	return bounty.Comment == "vlCVX"
+}
+
 func write(fileName string, claimed []interfaces.BountyClaimed) {
 	file, err := json.Marshal(claimed)
 	if err != nil {
@@ -742,4 +807,47 @@ func read(fileName string) []interfaces.BountyClaimed {
 	}
 
 	return allClaimed
+}
+
+func readConfig() interfaces.Config {
+
+	if !fileExists(CONFIG_PATH) {
+		return interfaces.Config{
+			LastBlock: 0,
+		}
+	}
+
+	file, err := os.ReadFile(CONFIG_PATH)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var config interfaces.Config
+	if err := json.Unmarshal([]byte(file), &config); err != nil {
+		log.Fatal(err)
+	}
+
+	return config
+}
+
+func writeConfig(config interfaces.Config) {
+	file, err := json.Marshal(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(CONFIG_PATH, file, 0644); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func writeStats(stats interfaces.Stats) {
+	file, err := json.Marshal(stats)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(STATS_PATH, file, 0644); err != nil {
+		log.Fatal(err)
+	}
 }
