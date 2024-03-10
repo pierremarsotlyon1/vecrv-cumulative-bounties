@@ -280,7 +280,7 @@ func fetchVotium(client *ethclient.Client, currentBlock uint64, config interface
 		FromBlock: big.NewInt(int64(from)),
 		ToBlock:   big.NewInt(int64(currentBlock)),
 		Addresses: VOTIUM_VL_CVX_V2_ADDRESSES,
-		Topics:    [][]common.Hash{{common.HexToHash("0x7c0c0ef7f1ccead819631ed9c10b0728e76274ee5572b53716ea96e7ec735ffa")}},
+		Topics:    [][]common.Hash{{common.HexToHash("0x7c0c0ef7f1ccead819631ed9c10b0728e76274ee5572b53716ea96e7ec735ffa"), common.HexToHash("0xf7992095989ff6fb8484c32670972fb7c67e943107c3f158013e2b7fb96d1971")}},
 	}
 
 	logs, err = client.FilterLogs(context.Background(), query)
@@ -294,13 +294,23 @@ func fetchVotium(client *ethclient.Client, currentBlock uint64, config interface
 			panic(err)
 		}
 
-		event, err := votiumContract.ParseNewIncentive(vLog)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
+		if strings.EqualFold(vLog.Topics[0].Hex(), "0x7c0c0ef7f1ccead819631ed9c10b0728e76274ee5572b53716ea96e7ec735ffa") {
+			event, err := votiumContract.ParseNewIncentive(vLog)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash, "vlCVX")
+		} else {
+			event, err := votiumContract.ParseIncreasedIncentive(vLog)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 
-		bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Amount, vLog.TxHash, "vlCVX")
+			bountiesClaimed = addClaim(client, bountiesClaimed, vLog.Address, event.Token, vLog.BlockNumber, event.Increase, vLog.TxHash, "vlCVX")
+
+		}
 	}
 
 	return bountiesClaimed
