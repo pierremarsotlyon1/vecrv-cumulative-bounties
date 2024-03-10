@@ -85,11 +85,7 @@ const STATS_PATH = "./stats.json"
 func goDotEnvVariable(key string) string {
 
 	// load .env file
-	err := godotenv.Load()
-
-	if err != nil {
-		log.Fatalf("Error loading .env file")
-	}
+	godotenv.Load()
 
 	return os.Getenv(key)
 }
