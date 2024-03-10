@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/joho/godotenv"
 )
 
 var VOTIUM_VE_CRV_ADDRESSES = []common.Address{
@@ -67,10 +68,7 @@ var BRIBE_CRV_FINANCE_ADDRESSES = []common.Address{
 var tokens = make(map[common.Address]uint8, 0)
 var tokenPrices = make(map[string]float64, 0)
 
-const RPC_URL = "/datastore/.ethereum/geth.ipc"
-
-const ALCHEMY_APIKEY = ""
-const ALCHEMY_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
+var ALCHEMY_RPC_URL = ""
 
 // time
 const MIN_TO_SEC = uint64(60)
@@ -82,17 +80,30 @@ const DATA_PATH = "./data.json"
 const CONFIG_PATH = "./config.json"
 const STATS_PATH = "./stats.json"
 
+// use godot package to load/read the .env file and
+// return the value of the key
+func goDotEnvVariable(key string) string {
+
+	// load .env file
+	err := godotenv.Load()
+
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+
+	return os.Getenv(key)
+}
+
 func main() {
-	if len(RPC_URL) == 0 {
-		fmt.Println("Main RPC url not set")
+
+	alchemyApiKey := goDotEnvVariable("ALCHEMY_APIKEY")
+	if len(alchemyApiKey) == 0 {
+		panic("ALCHEMY_APIKEY not set")
 	}
 
-	if len(ALCHEMY_RPC_URL) == 0 {
-		fmt.Println("Alchemy RPC url not set")
-		return
-	}
+	ALCHEMY_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/" + alchemyApiKey
 
-	client, err := ethclient.Dial(RPC_URL)
+	client, err := ethclient.Dial(ALCHEMY_RPC_URL)
 	if err != nil {
 		panic(err)
 	}
@@ -411,10 +422,6 @@ func fetchQuest(client *ethclient.Client, currentBlock uint64, config interfaces
 }
 
 func fetchYBribe(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
-	client2, err := ethclient.Dial(ALCHEMY_RPC_URL)
-	if err != nil {
-		panic(err)
-	}
 
 	from := config.LastBlock
 	if from == 0 {
@@ -446,7 +453,7 @@ func fetchYBribe(client *ethclient.Client, currentBlock uint64, config interface
 			panic(err)
 		}
 
-		receipt, err := client2.TransactionReceipt(context.Background(), vLog.TxHash)
+		receipt, err := client.TransactionReceipt(context.Background(), vLog.TxHash)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -494,7 +501,6 @@ func fetchBribeCrvFinance(client *ethclient.Client, currentBlock uint64, config 
 	hexCurrentBlock := fmt.Sprintf("%x", currentBlock)
 
 	for {
-		posturl := "https://eth-mainnet.g.alchemy.com/v2/" + ALCHEMY_APIKEY
 
 		query := `{
 			"id": 1,
@@ -525,7 +531,7 @@ func fetchBribeCrvFinance(client *ethclient.Client, currentBlock uint64, config 
 
 		body := []byte(query)
 
-		r, err := http.NewRequest("POST", posturl, bytes.NewBuffer(body))
+		r, err := http.NewRequest("POST", ALCHEMY_RPC_URL, bytes.NewBuffer(body))
 		if err != nil {
 			panic(err)
 		}
