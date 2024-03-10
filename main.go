@@ -69,6 +69,7 @@ var tokens = make(map[common.Address]uint8, 0)
 var tokenPrices = make(map[string]float64, 0)
 
 var ALCHEMY_RPC_URL = ""
+var RPC_LOCAL_NODE = "/datastore/.ethereum/geth.ipc"
 
 // time
 const MIN_TO_SEC = uint64(60)
@@ -99,9 +100,12 @@ func main() {
 
 	ALCHEMY_RPC_URL = "https://eth-mainnet.g.alchemy.com/v2/" + alchemyApiKey
 
-	client, err := ethclient.Dial(ALCHEMY_RPC_URL)
+	client, err := ethclient.Dial(RPC_LOCAL_NODE)
 	if err != nil {
-		panic(err)
+		client, err = ethclient.Dial(ALCHEMY_RPC_URL)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	currentBlock, err := client.BlockNumber(context.Background())
