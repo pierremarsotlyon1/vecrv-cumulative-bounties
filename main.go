@@ -146,9 +146,11 @@ func main() {
 	totalBountiesUSD := 0.0
 	totalVeCRVBountiesUSD := 0.0
 	totalVlCVXBountiesUSD := 0.0
+
+	allClaimedWithPrice := make([]interfaces.BountyClaimed, 0)
 	for _, bounty := range allClaimed {
 
-		price, exists := tokenPrices[bounty.TokenReward.Hex()]
+		/*price, exists := tokenPrices[bounty.TokenReward.Hex()]
 		if !exists {
 			tokenPrice := getTokenPrice(bounty.TokenReward)
 			if tokenPrice == 0 {
@@ -165,10 +167,10 @@ func main() {
 			}
 		}
 
-		bounty.CurrentPrice = price
+		bounty.CurrentPrice = price*/
 
 		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(bounty.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(bounty.TokenDecimals)))).Float64()
-		bountyAmount := (amount * price)
+		bountyAmount := (amount * bounty.HistoricalPrice)
 
 		totalBountiesUSD += bountyAmount
 		if isVlCVX(bounty) {
@@ -176,17 +178,20 @@ func main() {
 		} else {
 			totalVeCRVBountiesUSD += bountyAmount
 		}
+
+		allClaimedWithPrice = append(allClaimedWithPrice, bounty)
 	}
 
-	write(DATA_PATH, allClaimed)
+	write(DATA_PATH, allClaimedWithPrice)
 
 	fmt.Println("Total bounties USD (veCRV + vlCVX): ", fmt.Sprintf("%f", totalBountiesUSD))
 	fmt.Println("Total veCRV bounties USD : ", fmt.Sprintf("%f", totalVeCRVBountiesUSD))
 	fmt.Println("Total vlCVX bounties USD : ", fmt.Sprintf("%f", totalVlCVXBountiesUSD))
 
-	// Sort claims by timestamp DESC
-	sort.Slice(allClaimed, func(i, j int) bool { return allClaimed[i].Timestamp < allClaimed[j].Timestamp })
-	timestampStart := allClaimed[0].Timestamp
+	// Sort claims by timestamp ASC
+	sort.Slice(allClaimedWithPrice, func(i, j int) bool { return allClaimedWithPrice[i].Timestamp < allClaimedWithPrice[j].Timestamp })
+	timestampEnd := allClaimedWithPrice[len(allClaimedWithPrice)-1].Timestamp
+	timestampStart := allClaimedWithPrice[0].Timestamp
 
 	var stats interfaces.Stats
 
@@ -194,11 +199,11 @@ func main() {
 	stats.VeCRVTotalClaimed = totalVeCRVBountiesUSD
 	stats.VlCVXTotalClaimed = totalVlCVXBountiesUSD
 
-	stats.ClaimsLast7Days = generateDaysData(allClaimed, timestampStart, timestampStart-7*DAY_TO_SEC, 25*MIN_TO_SEC)
-	stats.ClaimsLast30Days = generateDaysData(allClaimed, timestampStart, timestampStart-30*DAY_TO_SEC, 2*HOUR_TO_SEC)
-	stats.ClaimsLast180Days = generateDaysData(allClaimed, timestampStart, timestampStart-180*DAY_TO_SEC, 12*HOUR_TO_SEC)
-	stats.ClaimsLast365Days = generateDaysData(allClaimed, timestampStart, timestampStart-365*DAY_TO_SEC, DAY_TO_SEC)
-	stats.ClaimsSinceInception = generateDaysData(allClaimed, timestampStart, 0, 2*DAY_TO_SEC)
+	stats.ClaimsLast7Days = generateDaysData(allClaimedWithPrice, timestampEnd-7*DAY_TO_SEC, timestampEnd, 25*MIN_TO_SEC)
+	stats.ClaimsLast30Days = generateDaysData(allClaimedWithPrice, timestampEnd-30*DAY_TO_SEC, timestampEnd, 2*HOUR_TO_SEC)
+	stats.ClaimsLast180Days = generateDaysData(allClaimedWithPrice, timestampEnd-180*DAY_TO_SEC, timestampEnd, 12*HOUR_TO_SEC)
+	stats.ClaimsLast365Days = generateDaysData(allClaimedWithPrice, timestampEnd-365*DAY_TO_SEC, timestampEnd, DAY_TO_SEC)
+	stats.ClaimsSinceInception = generateDaysData(allClaimedWithPrice, timestampStart, timestampEnd, 15*DAY_TO_SEC)
 
 	writeStats(stats)
 }
@@ -651,22 +656,14 @@ func generateDaysData(allClaimed []interfaces.BountyClaimed, start uint64, end u
 	currentTotalBountyDollarAmount := 0.0
 
 	for _, claimed := range allClaimed {
-		if claimed.Timestamp < end {
-			break
-		}
-
-		if current-interval > claimed.Timestamp {
-			statsClaim.Claims = append(statsClaim.Claims, interfaces.Claim{
-				Timestamp: current,
-				Value:     currentTotalBountyDollarAmount,
-			})
-
-			current = claimed.Timestamp
-			currentTotalBountyDollarAmount = 0.0
-		}
 
 		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(claimed.Amount), big.NewFloat(0).SetInt(math.BigPow(10, int64(claimed.TokenDecimals)))).Float64()
 		bountyDollarAmount := (amount * claimed.HistoricalPrice)
+		currentTotalBountyDollarAmount += bountyDollarAmount
+
+		if claimed.Timestamp < start {
+			continue
+		}
 
 		statsClaim.TotalClaimed += bountyDollarAmount
 		if isVlCVX(claimed) {
@@ -675,7 +672,14 @@ func generateDaysData(allClaimed []interfaces.BountyClaimed, start uint64, end u
 			statsClaim.VeCRVTotalClaimed += bountyDollarAmount
 		}
 
-		currentTotalBountyDollarAmount += bountyDollarAmount
+		if current+interval < claimed.Timestamp {
+			statsClaim.Claims = append(statsClaim.Claims, interfaces.Claim{
+				Timestamp: current,
+				Value:     currentTotalBountyDollarAmount,
+			})
+
+			current += interval
+		}
 	}
 
 	if currentTotalBountyDollarAmount > 0 {
