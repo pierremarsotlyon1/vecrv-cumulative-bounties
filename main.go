@@ -816,6 +816,11 @@ func fileExists(fileName string) bool {
 }
 
 func read(fileName string) []interfaces.BountyClaimed {
+
+	if !fileExists(fileName) {
+		return make([]interfaces.BountyClaimed, 0)
+	}
+
 	file, err := os.ReadFile(fileName)
 	if err != nil {
 		log.Fatal(err)
