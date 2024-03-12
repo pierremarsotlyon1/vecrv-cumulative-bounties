@@ -1,8 +1,13 @@
 package interfaces
 
-import "math/big"
+import (
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+)
 
 type Lock struct {
-	Timestamp uint64   `json:"timestamp"`
-	Value     *big.Int `json:"value"`
+	Tx        common.Hash `json:"tx"`
+	Timestamp uint64      `json:"timestamp"`
+	Value     *big.Int    `json:"value"`
 }

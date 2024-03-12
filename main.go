@@ -148,6 +148,7 @@ func main() {
 	fmt.Println(len(allClaimed), " claims found")
 
 	// veCRV locked
+	fmt.Println("Fetching locks")
 	locks := readLocks()
 	locks = append(locks, fetchVeCRVLocks(client, currentBlock, config)...)
 	writeLocks(locks)
@@ -237,7 +238,9 @@ func computeLocksStats(locks []interfaces.Lock) {
 		value, exists := locksPerPeriod[currentPeriod]
 		if !exists {
 			locksPerPeriod[currentPeriod] = big.NewInt(0)
+			value = locksPerPeriod[currentPeriod]
 		}
+
 		locksPerPeriod[currentPeriod] = new(big.Int).Add(value, lock.Value)
 	}
 
@@ -763,16 +766,20 @@ func fetchVeCRVLocks(client *ethclient.Client, currentBlock uint64, config inter
 
 	locks := make([]interfaces.Lock, 0)
 
+	abi, err := curveGC.CurveGCMetaData.GetAbi()
+	if err != nil {
+		panic(err)
+	}
+
 	for _, vLog := range logs {
-		gcCOntract, err := curveGC.NewCurveGC(vLog.Address, client)
-		if err != nil {
+		receivedMap := map[string]interface{}{}
+		if err := abi.UnpackIntoMap(receivedMap, "Deposit", vLog.Data); err != nil {
 			fmt.Println(err)
 			continue
 		}
 
-		event, err := gcCOntract.ParseDeposit(vLog)
-		if err != nil {
-			fmt.Println(err)
+		value := receivedMap["value"].(*big.Int)
+		if value.Cmp(big.NewInt(0)) != 1 {
 			continue
 		}
 
@@ -785,8 +792,9 @@ func fetchVeCRVLocks(client *ethclient.Client, currentBlock uint64, config inter
 		timestamp := block.Time()
 
 		locks = append(locks, interfaces.Lock{
+			Tx:        vLog.TxHash,
 			Timestamp: timestamp,
-			Value:     event.Value,
+			Value:     value,
 		})
 	}
 
