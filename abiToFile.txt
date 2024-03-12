@@ -8,3 +8,4 @@ abigen --abi=./abis/YBribeV3.json --pkg=yBribeV3 --out=YBribeV3.go
 abigen --abi=./abis/VotiumVECrv.json --pkg=votiumVECrv --out=VotiumVECrv.go
 abigen --abi=./abis/VotiumVLCVXOld.json --pkg=votiumVLCVXOld --out=VotiumVLCVXOld.go
 abigen --abi=./abis/VotiumVLCVXV2.json --pkg=votiumVLCVXV2 --out=VotiumVLCVXV2.go
+abigen --abi=./abis/CurveGC.json --pkg=curveGC --out=CurveGC.go

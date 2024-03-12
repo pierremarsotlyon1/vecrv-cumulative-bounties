@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"main/contracts/curveGC"
 	"main/contracts/erc20"
 	"main/contracts/questDistributor"
 	"main/contracts/votemarketV1"
@@ -65,6 +66,8 @@ var BRIBE_CRV_FINANCE_ADDRESSES = []common.Address{
 	common.HexToAddress("0x7893bbb46613d7a4fbcc31dab4c9b823ffee1026"),
 }
 
+var CURVE_GC_ADDRESS = common.HexToAddress("0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2")
+
 var tokens = make(map[common.Address]uint8, 0)
 var tokenPrices = make(map[string]float64, 0)
 
@@ -75,11 +78,14 @@ var RPC_LOCAL_NODE = "/datastore/.ethereum/geth.ipc"
 const MIN_TO_SEC = uint64(60)
 const HOUR_TO_SEC = 60 * MIN_TO_SEC
 const DAY_TO_SEC = HOUR_TO_SEC * 24
+const WEEK_TO_SEC = 7 * DAY_TO_SEC
 
 // json files
 const DATA_PATH = "./data.json"
 const CONFIG_PATH = "./config.json"
 const STATS_PATH = "./stats.json"
+const LOCKS_PATH = "./locks.json"
+const STATS_LOCK_PATH = "./stats-locks.json"
 
 // use godot package to load/read the .env file and
 // return the value of the key
@@ -115,9 +121,10 @@ func main() {
 
 	config := readConfig()
 
+	// Bounties
 	allClaimed := make([]interfaces.BountyClaimed, 0)
 
-	previousClaims := read(DATA_PATH)
+	previousClaims := readDataPath(DATA_PATH)
 	allClaimed = append(allClaimed, previousClaims...)
 
 	fmt.Println("Fetching votium")
@@ -140,9 +147,21 @@ func main() {
 
 	fmt.Println(len(allClaimed), " claims found")
 
+	// veCRV locked
+	locks := readLocks()
+	locks = append(locks, fetchVeCRVLocks(client, currentBlock, config)...)
+	writeLocks(locks)
+
+	// Write new config
 	config.LastBlock = currentBlock
 	writeConfig(config)
 
+	// Compute stats files
+	computeBountiesStats(allClaimed)
+	computeLocksStats(locks)
+}
+
+func computeBountiesStats(allClaimed []interfaces.BountyClaimed) {
 	totalBountiesUSD := 0.0
 	totalVeCRVBountiesUSD := 0.0
 	totalVlCVXBountiesUSD := 0.0
@@ -182,7 +201,7 @@ func main() {
 		allClaimedWithPrice = append(allClaimedWithPrice, bounty)
 	}
 
-	write(DATA_PATH, allClaimedWithPrice)
+	writeDataPath(DATA_PATH, allClaimedWithPrice)
 
 	fmt.Println("Total bounties USD (veCRV + vlCVX): ", fmt.Sprintf("%f", totalBountiesUSD))
 	fmt.Println("Total veCRV bounties USD : ", fmt.Sprintf("%f", totalVeCRVBountiesUSD))
@@ -206,6 +225,33 @@ func main() {
 	stats.ClaimsSinceInception = generateDaysData(allClaimedWithPrice, timestampStart, timestampEnd, 15*DAY_TO_SEC)
 
 	writeStats(stats)
+}
+
+func computeLocksStats(locks []interfaces.Lock) {
+
+	locksPerPeriod := make(map[uint64]*big.Int)
+
+	for _, lock := range locks {
+		currentPeriod := uint64(lock.Timestamp/WEEK_TO_SEC) * WEEK_TO_SEC
+
+		value, exists := locksPerPeriod[currentPeriod]
+		if !exists {
+			locksPerPeriod[currentPeriod] = big.NewInt(0)
+		}
+		locksPerPeriod[currentPeriod] = new(big.Int).Add(value, lock.Value)
+	}
+
+	statsLock := make([]interfaces.StatsLock, 0)
+	for period, lockAmount := range locksPerPeriod {
+		amount, _ := new(big.Float).Quo(big.NewFloat(0).SetInt(lockAmount), big.NewFloat(0).SetInt(math.BigPow(10, 18))).Float64()
+
+		statsLock = append(statsLock, interfaces.StatsLock{
+			Amount:    amount,
+			Timestamp: period + WEEK_TO_SEC,
+		})
+	}
+
+	writeStatsLocks(statsLock)
 }
 
 func fetchVotium(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
@@ -438,6 +484,11 @@ func fetchQuest(client *ethclient.Client, currentBlock uint64, config interfaces
 
 func fetchYBribe(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.BountyClaimed {
 
+	client2, err := ethclient.Dial(ALCHEMY_RPC_URL)
+	if err != nil {
+		panic(err)
+	}
+
 	from := config.LastBlock
 	if from == 0 {
 		from = 15878262
@@ -468,7 +519,7 @@ func fetchYBribe(client *ethclient.Client, currentBlock uint64, config interface
 			panic(err)
 		}
 
-		receipt, err := client.TransactionReceipt(context.Background(), vLog.TxHash)
+		receipt, err := client2.TransactionReceipt(context.Background(), vLog.TxHash)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -692,6 +743,56 @@ func generateDaysData(allClaimed []interfaces.BountyClaimed, start uint64, end u
 	return statsClaim
 }
 
+func fetchVeCRVLocks(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.Lock {
+	from := config.LastBlock
+	if from == 0 {
+		from = 10647812
+	}
+
+	query := ethereum.FilterQuery{
+		FromBlock: big.NewInt(int64(from)),
+		ToBlock:   big.NewInt(int64(currentBlock)),
+		Addresses: []common.Address{CURVE_GC_ADDRESS},
+		Topics:    [][]common.Hash{{common.HexToHash("0x4566dfc29f6f11d13a418c26a02bef7c28bae749d4de47e4e6a7cddea6730d59")}},
+	}
+
+	logs, err := client.FilterLogs(context.Background(), query)
+	if err != nil {
+		panic(err)
+	}
+
+	locks := make([]interfaces.Lock, 0)
+
+	for _, vLog := range logs {
+		gcCOntract, err := curveGC.NewCurveGC(vLog.Address, client)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		event, err := gcCOntract.ParseDeposit(vLog)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		block, err := client.BlockByNumber(context.Background(), big.NewInt(int64(vLog.BlockNumber)))
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+
+		timestamp := block.Time()
+
+		locks = append(locks, interfaces.Lock{
+			Timestamp: timestamp,
+			Value:     event.Value,
+		})
+	}
+
+	return locks
+}
+
 func getTokenPrice(token common.Address) float64 {
 
 	url := "https://coins.llama.fi/prices/current/ethereum:" + token.Hex()
@@ -796,7 +897,7 @@ func isVlCVX(bounty interfaces.BountyClaimed) bool {
 	return bounty.Comment == "vlCVX"
 }
 
-func write(fileName string, claimed []interfaces.BountyClaimed) {
+func writeDataPath(fileName string, claimed []interfaces.BountyClaimed) {
 	file, err := json.Marshal(claimed)
 	if err != nil {
 		log.Fatal(err)
@@ -815,7 +916,7 @@ func fileExists(fileName string) bool {
 	return true
 }
 
-func read(fileName string) []interfaces.BountyClaimed {
+func readDataPath(fileName string) []interfaces.BountyClaimed {
 
 	if !fileExists(fileName) {
 		return make([]interfaces.BountyClaimed, 0)
@@ -873,6 +974,47 @@ func writeStats(stats interfaces.Stats) {
 	}
 
 	if err := os.WriteFile(STATS_PATH, file, 0644); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func readLocks() []interfaces.Lock {
+
+	if !fileExists(LOCKS_PATH) {
+		return make([]interfaces.Lock, 0)
+	}
+
+	file, err := os.ReadFile(LOCKS_PATH)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	locks := make([]interfaces.Lock, 0)
+	if err := json.Unmarshal([]byte(file), &locks); err != nil {
+		log.Fatal(err)
+	}
+
+	return locks
+}
+
+func writeLocks(locks []interfaces.Lock) {
+	file, err := json.Marshal(locks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(LOCKS_PATH, file, 0644); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func writeStatsLocks(statsLock []interfaces.StatsLock) {
+	file, err := json.Marshal(statsLock)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := os.WriteFile(STATS_LOCK_PATH, file, 0644); err != nil {
 		log.Fatal(err)
 	}
 }
