@@ -31,6 +31,8 @@ const PARAMETER = "parameter"
 
 func FetchVotes(client *ethclient.Client, currentBlock uint64, config interfaces.Config) {
 
+	fmt.Println("Fetching votes")
+
 	// Read new vote event to fetch ipfs description
 	from := config.LastBlock
 	if from == 0 {
