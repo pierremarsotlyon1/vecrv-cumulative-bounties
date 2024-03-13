@@ -17,6 +17,8 @@ import (
 	"main/contracts/votiumVLCVXV2"
 	"main/contracts/yBribeV3"
 	"main/interfaces"
+	"main/src"
+	"main/utils"
 	"math/big"
 	"net/http"
 	"os"
@@ -152,6 +154,10 @@ func main() {
 	locks := readLocks()
 	locks = append(locks, fetchVeCRVLocks(client, currentBlock, config)...)
 	writeLocks(locks)
+
+	// Votes
+	fmt.Println("Fetching votes")
+	src.FetchVotes(client, currentBlock, config)
 
 	// Write new config
 	config.LastBlock = currentBlock
@@ -916,17 +922,9 @@ func writeDataPath(fileName string, claimed []interfaces.BountyClaimed) {
 	}
 }
 
-func fileExists(fileName string) bool {
-	if _, err := os.Stat(fileName); err != nil {
-		return false
-	}
-
-	return true
-}
-
 func readDataPath(fileName string) []interfaces.BountyClaimed {
 
-	if !fileExists(fileName) {
+	if !utils.FileExists(fileName) {
 		return make([]interfaces.BountyClaimed, 0)
 	}
 
@@ -945,7 +943,7 @@ func readDataPath(fileName string) []interfaces.BountyClaimed {
 
 func readConfig() interfaces.Config {
 
-	if !fileExists(CONFIG_PATH) {
+	if !utils.FileExists(CONFIG_PATH) {
 		return interfaces.Config{
 			LastBlock: 0,
 		}
@@ -988,7 +986,7 @@ func writeStats(stats interfaces.Stats) {
 
 func readLocks() []interfaces.Lock {
 
-	if !fileExists(LOCKS_PATH) {
+	if !utils.FileExists(LOCKS_PATH) {
 		return make([]interfaces.Lock, 0)
 	}
 
