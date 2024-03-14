@@ -10,6 +10,7 @@ import (
 	"main/utils"
 	"math/big"
 	"os"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -20,7 +21,9 @@ import (
 const LOCKS_PATH = "./locks.json"
 const STATS_LOCK_PATH = "./stats-locks.json"
 
-func FetchLocks(client *ethclient.Client, currentBlock uint64, config interfaces.Config) {
+func FetchLocks(wg *sync.WaitGroup, client *ethclient.Client, currentBlock uint64, config interfaces.Config) {
+	defer wg.Done()
+
 	fmt.Println("Fetching locks")
 
 	locks := readLocks()
@@ -31,6 +34,7 @@ func FetchLocks(client *ethclient.Client, currentBlock uint64, config interfaces
 }
 
 func fetchVeCRVLocks(client *ethclient.Client, currentBlock uint64, config interfaces.Config) []interfaces.Lock {
+
 	from := config.LastBlock
 	if from == 0 {
 		from = 10647812

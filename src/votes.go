@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -29,7 +30,8 @@ const VOTES_PATH = "./votes.json"
 const OWNERSHIP = "ownership"
 const PARAMETER = "parameter"
 
-func FetchVotes(client *ethclient.Client, currentBlock uint64, config interfaces.Config) {
+func FetchVotes(wg *sync.WaitGroup, client *ethclient.Client, currentBlock uint64, config interfaces.Config) {
+	defer wg.Done()
 
 	fmt.Println("Fetching votes")
 

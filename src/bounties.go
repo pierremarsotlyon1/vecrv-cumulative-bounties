@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -66,7 +67,9 @@ var BRIBE_CRV_FINANCE_ADDRESSES = []common.Address{
 const DATA_PATH = "./data.json"
 const STATS_PATH = "./stats.json"
 
-func FetchBounties(client *ethclient.Client, currentBlock uint64, config interfaces.Config, alchemyRpcUrl string) {
+func FetchBounties(wg *sync.WaitGroup, client *ethclient.Client, currentBlock uint64, config interfaces.Config, alchemyRpcUrl string) {
+	defer wg.Done()
+
 	// Bounties
 	allClaimed := make([]interfaces.BountyClaimed, 0)
 

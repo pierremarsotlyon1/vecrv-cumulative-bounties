@@ -8,6 +8,7 @@ import (
 	"main/src"
 	"main/utils"
 	"os"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/joho/godotenv"
@@ -54,9 +55,14 @@ func main() {
 
 	config := readConfig()
 
-	src.FetchBounties(client, currentBlock, config, ALCHEMY_RPC_URL)
-	src.FetchLocks(client, currentBlock, config)
-	src.FetchVotes(client, currentBlock, config)
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	src.FetchBounties(&wg, client, currentBlock, config, ALCHEMY_RPC_URL)
+	src.FetchLocks(&wg, client, currentBlock, config)
+	src.FetchVotes(&wg, client, currentBlock, config)
+
+	wg.Wait()
 
 	// Write new config
 	config.LastBlock = currentBlock
