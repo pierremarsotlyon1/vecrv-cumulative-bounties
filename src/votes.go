@@ -172,9 +172,8 @@ func FetchVotes(client *ethclient.Client, currentBlock uint64, config interfaces
 
 	// Check if we can get missing ipfs description
 	for i := 0; i < len(votes); i++ {
-		vote := votes[i]
-		if len(vote.Description) == 0 {
-			vote.Description = utils.GetIpfs(vote.IpfsId)
+		if len(votes[i].Description) == 0 {
+			votes[i].Description = utils.GetIpfs(votes[i].IpfsId)
 		}
 	}
 
