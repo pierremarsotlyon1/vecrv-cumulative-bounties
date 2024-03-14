@@ -159,10 +159,10 @@ func FetchVotes(client *ethclient.Client, currentBlock uint64, config interfaces
 						panic(err)
 					}
 
-					vote.Executed = v.Executed
-					vote.Open = v.Open
-					vote.Nay = v.Nay
-					vote.Yea = v.Yea
+					votes[i].Executed = v.Executed
+					votes[i].Open = v.Open
+					votes[i].Nay = v.Nay
+					votes[i].Yea = v.Yea
 
 					break
 				}
