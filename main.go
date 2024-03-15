@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/ethclient"
-	"github.com/joho/godotenv"
 )
 
 var ALCHEMY_RPC_URL = ""
@@ -21,19 +20,9 @@ var RPC_LOCAL_NODE = "/datastore/.ethereum/geth.ipc"
 
 const CONFIG_PATH = "./config.json"
 
-// use godot package to load/read the .env file and
-// return the value of the key
-func goDotEnvVariable(key string) string {
-
-	// load .env file
-	godotenv.Load()
-
-	return os.Getenv(key)
-}
-
 func main() {
 
-	alchemyApiKey := goDotEnvVariable("ALCHEMY_APIKEY")
+	alchemyApiKey := utils.GoDotEnvVariable("ALCHEMY_APIKEY")
 	if len(alchemyApiKey) == 0 {
 		panic("ALCHEMY_APIKEY not set")
 	}
@@ -56,11 +45,12 @@ func main() {
 	config := readConfig()
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 
-	src.FetchBounties(&wg, client, currentBlock, config, ALCHEMY_RPC_URL)
-	src.FetchLocks(&wg, client, currentBlock, config)
-	src.FetchVotes(&wg, client, currentBlock, config)
+	go src.FetchBounties(&wg, client, currentBlock, config, ALCHEMY_RPC_URL)
+	go src.FetchLocks(&wg, client, currentBlock, config)
+	go src.FetchVotes(&wg, client, currentBlock, config)
+	go src.FetchGaugeWeights(&wg)
 
 	wg.Wait()
 

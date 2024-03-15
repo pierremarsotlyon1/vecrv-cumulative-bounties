@@ -6,16 +6,20 @@ import (
 	"main/interfaces"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
 
 var tokenPrices = make(map[string]float64, 0)
+var priceMutex sync.Mutex
 
-func GetHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float64 {
+func GetHistoricalPriceTokenPrice(token common.Address, chainName string, timestamp uint64) float64 {
+	priceMutex.Lock()
+	defer priceMutex.Unlock()
 
-	url := "https://coins.llama.fi/prices/historical/" + strconv.FormatUint(timestamp, 10) + "/ethereum:" + token.Hex()
+	url := "https://coins.llama.fi/prices/historical/" + strconv.FormatUint(timestamp, 10) + "/" + chainName + ":" + token.Hex()
 
 	price, exists := tokenPrices[url]
 	if exists {
@@ -44,7 +48,7 @@ func GetHistoricalPriceTokenPrice(token common.Address, timestamp uint64) float6
 		return 0
 	}
 
-	obj, exists := defilammaPrice.Coins["ethereum:"+token.Hex()]
+	obj, exists := defilammaPrice.Coins[chainName+":"+token.Hex()]
 	if !exists {
 		tokenPrices[url] = 0
 		return 0

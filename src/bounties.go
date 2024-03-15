@@ -554,7 +554,7 @@ func addClaim(client *ethclient.Client, bountiesClaimed []interfaces.BountyClaim
 
 	timestamp := block.Time()
 
-	historicalPrice := utils.GetHistoricalPriceTokenPrice(rewardToken, timestamp)
+	historicalPrice := utils.GetHistoricalPriceTokenPrice(rewardToken, "ethereum", timestamp)
 
 	bountiesClaimed = append(bountiesClaimed, interfaces.BountyClaimed{
 		Contract:        contract,
